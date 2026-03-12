@@ -3,7 +3,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: basic-crud-api-dev-db
-    restart: unless_stopped
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${DB_NAME:-basic_crud_api_dev}
       POSTGRES_USER: ${DB_USER:-basic_crud_api}
