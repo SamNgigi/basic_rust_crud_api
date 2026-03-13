@@ -31,4 +31,8 @@ dev_logs *ARGS:
 dev_logs_app:
   {{_dc}} logs -f app
 
+# Shell into docker postgres
+dev_psql:
+  {{_dc}} exec postgres psql -U $DB_USER -d $DB_NAME
+
 
