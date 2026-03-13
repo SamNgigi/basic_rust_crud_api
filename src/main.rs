@@ -1,24 +1,20 @@
 mod config;
+mod errors;
 
-#[allow(unused_imports)]
+use anyhow::Context;
 use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::{get, post},
 };
+use config::{AppConfig, create_pool};
+use errors::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
-
-#[allow(unused_imports)]
-use sqlx::{
-    FromRow, PgPool,
-    postgres::{PgConnectOptions, PgPoolOptions},
-};
+use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
-use config::{AppConfig, create_pool};
-
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct UserPayload {
     name: String,
     email: String,
@@ -73,36 +69,58 @@ async fn root() -> &'static str {
 async fn create_user(
     State(pool): State<PgPool>,
     Json(payload): Json<UserPayload>,
-) -> Result<(StatusCode, Json<User>), StatusCode> {
-    sqlx::query_as::<_, User>("INSERT INTO users (name, email) VALUES ($1, $2) RETURNING *")
-        .bind(payload.name)
-        .bind(payload.email)
-        .fetch_one(&pool)
-        .await
-        .map(|u| (StatusCode::CREATED, Json(u)))
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+) -> AppResult<(StatusCode, Json<User>)> {
+    validate_user_payload(&payload.name, &payload.email)?;
+    let user = sqlx::query_as::<_, User>(
+        r#"
+            INSERT INTO users (name, email) 
+            VALUES ($1, $2) 
+            RETURNING id, uuid, name, email
+        "#,
+    )
+    .bind(payload.name)
+    .bind(payload.email)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| AppError::from_sqlx(e, "❌ Failed to create user"))?;
+
+    Ok((StatusCode::CREATED, Json(user)))
 }
 
 // GET ALL USERS
-async fn list_users(State(pool): State<PgPool>) -> Result<Json<Vec<User>>, StatusCode> {
-    sqlx::query_as::<_, User>("SELECT * FROM users")
-        .fetch_all(&pool)
-        .await
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+async fn list_users(State(pool): State<PgPool>) -> AppResult<Json<Vec<User>>> {
+    let users = sqlx::query_as::<_, User>(
+        r#"
+                SELECT id, uuid, name, email 
+                    FROM users
+                ORDER BY id
+        "#,
+    )
+    .fetch_all(&pool)
+    .await
+    .context("❌ Failed to list users")
+    .map_err(AppError::Internal)?;
+
+    Ok(Json(users))
 }
 
 // GET USER BY ID
 async fn get_user_by_id(
     State(pool): State<PgPool>,
     Path(id): Path<i64>,
-) -> Result<Json<User>, StatusCode> {
-    sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
-        .bind(id)
-        .fetch_one(&pool)
-        .await
-        .map(Json)
-        .map_err(|_| StatusCode::NOT_FOUND)
+) -> AppResult<(StatusCode, Json<User>)> {
+    let user = sqlx::query_as::<_, User>(
+        r#"
+                SELECT id, uuid, name, email
+                    FROM users 
+                WHERE id = $1
+            "#,
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| AppError::from_sqlx(e, format!("❌ Failed to fetch user with id={id}")))?;
+    Ok((StatusCode::OK, Json(user)))
 }
 
 // UPDATE USER
@@ -110,33 +128,60 @@ async fn update_user(
     State(pool): State<PgPool>,
     Path(id): Path<i64>,
     Json(payload): Json<UserPayload>,
-) -> Result<Json<User>, StatusCode> {
-    sqlx::query_as::<_, User>(
-        "UPDATE users SET name = $1, email = $2 WHERE id = $3 RETURNING id, name, email",
+) -> AppResult<(StatusCode, Json<User>)> {
+    validate_user_payload(&payload.name, &payload.email)?;
+
+    let user = sqlx::query_as::<_, User>(
+        r#"
+            UPDATE users SET name = $1, email = $2 
+            WHERE id = $3 
+            RETURNING id, uuid, name, email
+        "#,
     )
     .bind(payload.name)
     .bind(payload.email)
     .bind(id)
     .fetch_one(&pool)
     .await
-    .map(Json)
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    .map_err(|e| AppError::from_sqlx(e, format!("❌ Failed to update user with id={id}")))?;
+
+    Ok((StatusCode::OK, Json(user)))
 }
 
 // DELETE USER
-async fn delete_user(
-    State(pool): State<PgPool>,
-    Path(id): Path<i64>,
-) -> Result<StatusCode, StatusCode> {
-    let result = sqlx::query("DELETE FROM users WHERE id = $1")
-        .bind(id)
-        .execute(&pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+async fn delete_user(State(pool): State<PgPool>, Path(id): Path<i64>) -> AppResult<StatusCode> {
+    let result = sqlx::query(
+        r#"
+                DELETE FROM users 
+                WHERE id = $1
+            "#,
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .map_err(|e| AppError::from_sqlx(e, format!("❌ Failed to delete use with id={id}")))?;
 
     if result.rows_affected() == 0 {
-        Err(StatusCode::NOT_FOUND)
-    } else {
-        Ok(StatusCode::NO_CONTENT)
+        return Err(AppError::NotFound);
     }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn validate_user_payload(name: &str, email: &str) -> AppResult<()> {
+    if name.trim().is_empty() {
+        return Err(AppError::BadRequest("name cannot be empty".to_string()));
+    }
+
+    if email.trim().is_empty() {
+        return Err(AppError::BadRequest("email cannot be empty".to_string()));
+    }
+
+    if !email.contains('@') {
+        return Err(AppError::BadRequest(
+            "must provide a valid email".to_string(),
+        ));
+    }
+
+    Ok(())
 }
