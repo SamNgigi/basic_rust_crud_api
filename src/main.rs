@@ -83,7 +83,7 @@ impl AppConfig {
 impl DatabaseConfig {
     fn from_env() -> Self {
         Self {
-            host: env::var("DB_HOST").unwrap_or_else(|_| "localhost".to_string()),
+            host: env::var("DB_HOST").unwrap_or_else(|_| "postgres".to_string()),
             port: env::var("DB_PORT")
                 .unwrap_or_else(|_| "5432".to_string())
                 .parse()

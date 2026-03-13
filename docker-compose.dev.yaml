@@ -1,4 +1,19 @@
 services:
+  # --- App ---------------------
+  app:
+    container_name: basic-crud-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_NAME=${DB_NAME:-basic_crud_api_dev}
+      - DB_USER=${DB_USER:-basic_crud_api}
+      - DB_PASSWORD=${DB_PASSWORD:-password12345}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+
   # --- PostgreSQL ---------------------
   postgres:
     image: postgres:16-alpine
