@@ -1,6 +1,6 @@
 ### 
 
-@baseUrl = http://localhost:8000
+@baseUrl = http://127.0.0.1:8000
 
 
 ### 1. Test Root Endpoint (Health Check)
@@ -25,8 +25,8 @@ POST {{baseUrl}}/users HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "tstark@marvel.com",
-  "name": "Tony Stark"
+  "email": "tchalla#marvel.com",
+  "name": "T'Chaka"
 }
 
 
@@ -53,7 +53,7 @@ GET {{baseUrl}}/users/1 HTTP/1.1
 
 ### 7. Get Non Existent User e.g with Id 555
 
-GET {{baseUrl}}/users/555 HTTP/1.1
+GET {{baseUrl}}/users/4 HTTP/1.1
 
 
 ### 8. Update User
@@ -74,7 +74,7 @@ GET {{baseUrl}}/users HTTP/1.1
 
 ### 10. Delete User 1
 
-DELETE {{baseUrl}}/users/1 HTTP/1.1
+DELETE {{baseUrl}}/users/4 HTTP/1.1
 
 
 ### 11. Get all Users verifying delete

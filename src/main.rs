@@ -12,7 +12,10 @@ use config::{AppConfig, create_pool};
 use errors::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
+
+use std::net::SocketAddr;
 
 #[derive(Debug, Deserialize)]
 struct UserPayload {
@@ -29,7 +32,15 @@ struct User {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,tower_http=info,axum=debug".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
     let config = AppConfig::from_env();
     let pool = create_pool(&config.db)
         .await
@@ -49,11 +60,15 @@ async fn main() {
         .with_state(pool);
 
     let addr = format!("{}:{}", &config.app_host, &config.app_port);
+    let addr: SocketAddr = addr.parse()?;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("Failed to bind to {addr}");
     println!("🚀 Server running on port 8000");
+    tracing::info!("listening on http://{}", addr);
     axum::serve(listener, app).await.unwrap();
+
+    Ok(())
 }
 
 // -----------------------------------------------------------------
@@ -70,7 +85,7 @@ async fn create_user(
     State(pool): State<PgPool>,
     Json(payload): Json<UserPayload>,
 ) -> AppResult<(StatusCode, Json<User>)> {
-    validate_user_payload(&payload.name, &payload.email)?;
+    validate_user_payload(&payload)?;
     let user = sqlx::query_as::<_, User>(
         r#"
             INSERT INTO users (name, email) 
@@ -119,7 +134,7 @@ async fn get_user_by_id(
     .bind(id)
     .fetch_one(&pool)
     .await
-    .map_err(|e| AppError::from_sqlx(e, format!("❌ Failed to fetch user with id={id}")))?;
+    .map_err(|e| AppError::from_sqlx(e, format!("Failed to fetch user with id={id}")))?;
     Ok((StatusCode::OK, Json(user)))
 }
 
@@ -129,7 +144,7 @@ async fn update_user(
     Path(id): Path<i64>,
     Json(payload): Json<UserPayload>,
 ) -> AppResult<(StatusCode, Json<User>)> {
-    validate_user_payload(&payload.name, &payload.email)?;
+    validate_user_payload(&payload)?;
 
     let user = sqlx::query_as::<_, User>(
         r#"
@@ -143,7 +158,7 @@ async fn update_user(
     .bind(id)
     .fetch_one(&pool)
     .await
-    .map_err(|e| AppError::from_sqlx(e, format!("❌ Failed to update user with id={id}")))?;
+    .map_err(|e| AppError::from_sqlx(e, format!("Failed to update user with id={id}")))?;
 
     Ok((StatusCode::OK, Json(user)))
 }
@@ -159,7 +174,7 @@ async fn delete_user(State(pool): State<PgPool>, Path(id): Path<i64>) -> AppResu
     .bind(id)
     .execute(&pool)
     .await
-    .map_err(|e| AppError::from_sqlx(e, format!("❌ Failed to delete use with id={id}")))?;
+    .map_err(|e| AppError::from_sqlx(e, format!("Failed to delete use with id={id}")))?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
@@ -168,19 +183,17 @@ async fn delete_user(State(pool): State<PgPool>, Path(id): Path<i64>) -> AppResu
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn validate_user_payload(name: &str, email: &str) -> AppResult<()> {
-    if name.trim().is_empty() {
+fn validate_user_payload(payload: &UserPayload) -> AppResult<()> {
+    if payload.name.trim().is_empty() {
         return Err(AppError::BadRequest("name cannot be empty".to_string()));
     }
 
-    if email.trim().is_empty() {
+    if payload.email.trim().is_empty() {
         return Err(AppError::BadRequest("email cannot be empty".to_string()));
     }
 
-    if !email.contains('@') {
-        return Err(AppError::BadRequest(
-            "must provide a valid email".to_string(),
-        ));
+    if !payload.email.contains('@') {
+        return Err(AppError::BadRequest("email must be valid".to_string()));
     }
 
     Ok(())
