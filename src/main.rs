@@ -1,7 +1,6 @@
 mod config;
 mod errors;
 
-use anyhow::Context;
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -13,17 +12,27 @@ use errors::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use utoipa::{OpenApi, ToSchema};
+use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 use std::net::SocketAddr;
 
-#[derive(Debug, Deserialize)]
+#[derive(OpenApi)]
+#[openapi(
+    paths(create_user),
+    components(schemas(User, UserPayload)),
+    tags((name="users", description="User management endpoints"))
+)]
+struct ApiDocs;
+
+#[derive(Debug, Deserialize, ToSchema)]
 struct UserPayload {
     name: String,
     email: String,
 }
 
-#[derive(Serialize, FromRow)]
+#[derive(Serialize, FromRow, ToSchema)]
 struct User {
     id: i64,
     uuid: Uuid,
@@ -44,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
     let config = AppConfig::from_env();
     let pool = create_pool(&config.db)
         .await
-        .expect("❌ Failed to Connect to Postgres");
+        .expect("Failed to Connect to Postgres");
     sqlx::migrate!()
         .run(&pool)
         .await
@@ -57,6 +66,7 @@ async fn main() -> anyhow::Result<()> {
             "/users/{id}",
             get(get_user_by_id).put(update_user).delete(delete_user),
         )
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDocs::openapi()))
         .with_state(pool);
 
     let addr = format!("{}:{}", &config.app_host, &config.app_port);
@@ -81,6 +91,17 @@ async fn root() -> &'static str {
 }
 
 // CREATE USER
+#[utoipa::path(
+    post,
+    path = "/users",
+    request_body = UserPayload,
+    responses(
+        (status = 201, description = "User created", body = User),
+        (status = 400, description = "Invalid payload"),
+        (status = 500, description = "Internal error"),
+    ),
+    tag = "users"
+)]
 async fn create_user(
     State(pool): State<PgPool>,
     Json(payload): Json<UserPayload>,
@@ -97,7 +118,7 @@ async fn create_user(
     .bind(payload.email)
     .fetch_one(&pool)
     .await
-    .map_err(|e| AppError::from_sqlx(e, "❌ Failed to create user"))?;
+    .map_err(|e| AppError::from_sqlx(e, "Failed to create user"))?;
 
     Ok((StatusCode::CREATED, Json(user)))
 }
@@ -113,8 +134,7 @@ async fn list_users(State(pool): State<PgPool>) -> AppResult<Json<Vec<User>>> {
     )
     .fetch_all(&pool)
     .await
-    .context("❌ Failed to list users")
-    .map_err(AppError::Internal)?;
+    .map_err(|e| AppError::from_sqlx(e, "failed to list users"))?;
 
     Ok(Json(users))
 }
@@ -174,7 +194,7 @@ async fn delete_user(State(pool): State<PgPool>, Path(id): Path<i64>) -> AppResu
     .bind(id)
     .execute(&pool)
     .await
-    .map_err(|e| AppError::from_sqlx(e, format!("Failed to delete use with id={id}")))?;
+    .map_err(|e| AppError::from_sqlx(e, format!("Failed to delete user with id={id}")))?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
